@@ -135,13 +135,13 @@ herdr server reload-config
 
 **Opening a review**
 
-| Action          | Review opened                                                                                              |
-| --------------- | ---------------------------------------------------------------------------------------------------------- |
-| `review`        | Configured `default_target`; `auto` selects the branch diff when ahead of base, otherwise the working tree |
-| `review:staged` | Staged changes with `hunk diff --staged`                                                                   |
-| `review:branch` | `<base>...HEAD`; falls back to the working tree with a warning when no base can be resolved                |
-| `review:commit` | The latest commit, or a locally available commit from a Ctrl-clicked GitHub commit URL                     |
-| `review:stash`  | The most recent stash entry                                                                                |
+| Action          | Review opened                                                                                                                                   |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `review`        | Configured `default_target`; `auto` selects the branch diff when ahead of base, otherwise the working tree                                      |
+| `review:staged` | Staged changes with `hunk diff --staged`                                                                                                        |
+| `review:branch` | `<base>...HEAD`, or `<base>` alone when `branch_scope = "worktree"`; falls back to the working tree with a warning when no base can be resolved |
+| `review:commit` | The latest commit, or a locally available commit from a Ctrl-clicked GitHub commit URL                                                          |
+| `review:stash`  | The most recent stash entry                                                                                                                     |
 
 **Everything else**
 
@@ -201,6 +201,7 @@ auto_open         = false
 on_states         = ["idle"]  # idle | working | blocked | unknown
 reuse_pane        = true
 default_target    = "auto"    # auto | working | staged | branch
+branch_scope      = "commits" # commits | worktree
 watch             = false
 placement         = "split"   # overlay | split | tab | zoomed
 exclude_untracked = false
@@ -230,6 +231,7 @@ extra_args   = []
 | `review.on_states`         | List of `idle`, `working`, `blocked`, `unknown` | Selects the Herdr agent states that trigger automatic opening. An empty list disables all triggers.                        |
 | `review.reuse_pane`        | `true` / `false`                                | Refreshes the worktree's existing review pane when possible instead of opening another pane.                               |
 | `review.default_target`    | `auto`, `working`, `staged`, `branch`           | Chooses what the `review` action shows. `auto` uses the branch diff when ahead of its base and the working tree otherwise. |
+| `review.branch_scope`      | `commits`, `worktree`                           | Chooses what a branch review compares the base against. `commits` uses `<base>...HEAD`; `worktree` uses `<base>` alone.    |
 | `review.watch`             | `true` / `false`                                | Passes `--watch` to Hunk so an open review refreshes as its underlying source changes.                                     |
 | `review.placement`         | `overlay`, `split`, `tab`, `zoomed`             | Chooses where Herdr opens review panes: over the active pane, beside it, in a new tab, or as a zoomed pane.                |
 | `review.exclude_untracked` | `true` / `false`                                | Hides untracked files from working-tree, staged, and branch reviews.                                                       |
@@ -279,6 +281,13 @@ Automatic opens target the pane that emitted the agent event.
 
 `default_target = "auto"` selects a branch review only when the current branch has commits ahead of
 its resolved base. Otherwise, it opens the working tree.
+
+`branch_scope` decides what a branch review — both `review:branch` and the branch diff `auto`
+selects — compares the base against. The default `"commits"` uses `<base>...HEAD`, a three-dot range
+between two commits, so uncommitted edits and untracked files never appear. `"worktree"` passes
+`<base>` on its own, which diffs it against the working tree and therefore includes them. The scope
+only chooses the range: a branch review still requires a base to resolve, and `auto` still needs the
+branch to be ahead of it.
 
 `exclude_untracked = true` hides untracked files in working-tree, staged, and branch reviews. Hunk
 does not accept that option for commit or stash reviews.

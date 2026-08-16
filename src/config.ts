@@ -21,12 +21,21 @@ export type TargetMode = "auto" | ResolvedTargetMode;
 /** Modes suitable as a standing default. */
 export type DefaultTargetMode = "auto" | "working" | "staged" | "branch";
 
+/**
+ * What a branch review compares the base against. `commits` uses `<base>...HEAD`, which compares
+ * two commits and therefore omits anything not committed. `worktree` passes the base on its own so
+ * uncommitted edits and untracked files are included.
+ */
+export type BranchScope = "commits" | "worktree";
+
 export interface PluginConfig {
   review: {
     auto_open: boolean;
     on_states: AgentState[];
     reuse_pane: boolean;
     default_target: DefaultTargetMode;
+    /** Applies to both `review:branch` and the branch diff `auto` selects. */
+    branch_scope: BranchScope;
     watch: boolean;
     /** Passed to `hunk diff` as `--exclude-untracked`. */
     exclude_untracked: boolean;
@@ -56,6 +65,7 @@ export const DEFAULTS: PluginConfig = {
     on_states: ["idle"],
     reuse_pane: true,
     default_target: "auto",
+    branch_scope: "commits",
     watch: false,
     exclude_untracked: false,
     placement: "split",
@@ -68,6 +78,7 @@ export const DEFAULTS: PluginConfig = {
 };
 
 const TARGET: DefaultTargetMode[] = ["auto", "working", "staged", "branch"];
+const BRANCH_SCOPES: BranchScope[] = ["commits", "worktree"];
 const PLACEMENTS: Placement[] = ["overlay", "split", "tab", "zoomed"];
 const AGENT_STATES: AgentState[] = ["idle", "working", "blocked", "unknown"];
 
@@ -115,6 +126,7 @@ export function loadConfig(configDir: string): PluginConfig {
       on_states: subset(r.on_states, AGENT_STATES, DEFAULTS.review.on_states),
       reuse_pane: bool(r.reuse_pane, DEFAULTS.review.reuse_pane),
       default_target: pick(r.default_target, TARGET, DEFAULTS.review.default_target),
+      branch_scope: pick(r.branch_scope, BRANCH_SCOPES, DEFAULTS.review.branch_scope),
       watch: bool(r.watch, DEFAULTS.review.watch),
       exclude_untracked: bool(r.exclude_untracked, DEFAULTS.review.exclude_untracked),
       placement: pick(r.placement, PLACEMENTS, DEFAULTS.review.placement),

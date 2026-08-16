@@ -232,6 +232,63 @@ describe("resolveTarget", () => {
       }
     });
   });
+
+  // A three-dot range compares two commits, so uncommitted edits and untracked
+  // files never reach the review. Passing the base on its own diffs it against
+  // the working tree instead.
+  describe("branch_scope", () => {
+    const worktreeScope = {
+      ...DEFAULTS,
+      review: { ...DEFAULTS.review, branch_scope: "worktree" as const },
+    };
+
+    it("compares the base against the working tree for an explicit branch review", () => {
+      const t = resolveTarget({ worktree: "/wt/x" }, worktreeScope, deps({}), "branch");
+      expect(t.mode).toBe("branch");
+      expect(t.ref).toBe("origin/main");
+    });
+
+    it("compares the base against the working tree in auto mode", () => {
+      const t = resolveTarget({ worktree: "/wt/x" }, worktreeScope, deps({ ahead: true }));
+      expect(t.mode).toBe("branch");
+      expect(t.ref).toBe("origin/main");
+    });
+
+    it("keeps the commit range by default", () => {
+      const t = resolveTarget({ worktree: "/wt/x" }, DEFAULTS, deps({}), "branch");
+      expect(t.ref).toBe("origin/main...HEAD");
+    });
+
+    it("keeps the commit range in auto mode by default", () => {
+      const t = resolveTarget({ worktree: "/wt/x" }, DEFAULTS, deps({ ahead: true }));
+      expect(t.ref).toBe("origin/main...HEAD");
+    });
+
+    // The scope only picks the range. Whether a branch review happens at all is
+    // still decided by the base resolving and the branch being ahead.
+    it("still falls back to the working tree when no base resolves", () => {
+      const t = resolveTarget({ worktree: "/wt/x" }, worktreeScope, deps({ base: null }), "branch");
+      expect(t.mode).toBe("working");
+      expect(t.warning).toMatch(/base/i);
+    });
+
+    it("still picks the working tree in auto mode when the branch is not ahead", () => {
+      const t = resolveTarget({ worktree: "/wt/x" }, worktreeScope, deps({ ahead: false }));
+      expect(t.mode).toBe("working");
+      expect(t.ref).toBeUndefined();
+    });
+
+    it("leaves an explicit ref override untouched", () => {
+      const t = resolveTarget(
+        { worktree: "/wt/x" },
+        worktreeScope,
+        deps({}),
+        "branch",
+        "v1.0.0...HEAD",
+      );
+      expect(t.ref).toBe("v1.0.0...HEAD");
+    });
+  });
 });
 
 describe("readContext feeding resolveTarget", () => {

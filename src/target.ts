@@ -45,6 +45,11 @@ export function resolveTarget(
   const withWarning = (target: Omit<Target, "warning">): Target =>
     warnings.length > 0 ? { ...target, warning: warnings.join(" ") } : target;
 
+  // `commits` compares two commits, so nothing uncommitted reaches the review. `worktree` passes
+  // the base on its own, which diffs it against the working tree and keeps untracked files.
+  const rangeFrom = (base: string): string =>
+    cfg.review.branch_scope === "worktree" ? base : `${base}...HEAD`;
+
   // A branch target without a base would silently become a working-tree diff.
   const branchTarget = (): Omit<Target, "warning"> | null => {
     const base = deps.resolveBaseRef(worktree);
@@ -52,7 +57,7 @@ export function resolveTarget(
       warnings.push("No base branch resolved; reviewing the working tree instead.");
       return null;
     }
-    return { worktree, mode: "branch", ref: `${base}...HEAD` };
+    return { worktree, mode: "branch", ref: rangeFrom(base) };
   };
 
   if (requested === "branch") {
@@ -72,7 +77,7 @@ export function resolveTarget(
     return withWarning({ worktree, mode: "working" });
   }
   if (deps.hasCommitsAhead(worktree, base)) {
-    return withWarning({ worktree, mode: "branch", ref: `${base}...HEAD` });
+    return withWarning({ worktree, mode: "branch", ref: rangeFrom(base) });
   }
   return withWarning({ worktree, mode: "working" });
 }

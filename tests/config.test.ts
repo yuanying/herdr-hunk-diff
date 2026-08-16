@@ -31,6 +31,7 @@ describe("loadConfig", () => {
   it("exposes no config keys the plugin does not act on", () => {
     expect(Object.keys(DEFAULTS.review).sort()).toEqual([
       "auto_open",
+      "branch_scope",
       "default_target",
       "exclude_untracked",
       "on_states",
@@ -70,6 +71,24 @@ describe("loadConfig", () => {
       "split",
     );
     expect(DEFAULTS.review.placement).toBe("split");
+  });
+
+  it("accepts every branch scope", () => {
+    for (const scope of ["commits", "worktree"] as const) {
+      expect(
+        loadConfig(withConfig(`[review]\nbranch_scope = "${scope}"\n`)).review.branch_scope,
+      ).toBe(scope);
+    }
+  });
+
+  it("keeps the commit range as the branch scope default", () => {
+    expect(DEFAULTS.review.branch_scope).toBe("commits");
+  });
+
+  it("falls back to the commit range for an unknown branch scope", () => {
+    expect(loadConfig(withConfig(`[review]\nbranch_scope = "tree"\n`)).review.branch_scope).toBe(
+      "commits",
+    );
   });
 
   it("rejects a string auto_open value and falls back to the default", () => {
