@@ -1,0 +1,103 @@
+name: Release fork build
+
+# Tags main as v<upstream version>-fork.<N> and publishes a release. The consumer
+# (yuanying/devbox) watches these releases with Renovate, so this is the only thing that
+# makes a change reachable.
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: "Fork revision N (defaults to one past the highest existing tag)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-fork
+
+env:
+  UPSTREAM: jhochenbaum/herdr-hunk-diff
+
+jobs:
+  release:
+    name: Tag and publish
+    # Releases only ever come off main; a tag cut elsewhere would not match the marker.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute tag
+        id: tag
+        env:
+          INPUT_REV: ${{ inputs.revision }}
+        run: |
+          set -euo pipefail
+          base="$(cat .github/upstream-release)"
+          n="${INPUT_REV:-}"
+          if [ -z "${n}" ]; then
+            n="$(git tag --list "${base}-fork.*" | sed "s|^${base}-fork\.||" | sort -n | tail -1)"
+            n=$(( ${n:-0} + 1 ))
+          fi
+          tag="${base}-fork.${n}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "::error::${tag} already exists"
+            exit 1
+          fi
+          printf 'tag=%s\nbase=%s\n' "${tag}" "${base}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      # devbox clones this tag and builds it, so a broken tag breaks the image build.
+      - name: Verify
+        run: |
+          npm ci
+          npm run check
+          npm run build
+          npm test
+
+      - name: Tag and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          BASE: ${{ steps.tag.outputs.base }}
+        run: |
+          set -euo pipefail
+          delta="$(git diff --stat "${BASE}..HEAD" -- . \
+            ':!FORK.md' ':!.github/upstream-release' \
+            ':!.github/workflows/sync-upstream.yml' ':!.github/workflows/release.yml')"
+          if [ -z "${delta}" ]; then
+            echo "::warning::No fork delta against ${BASE}; upstream may have absorbed the feature"
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Fork build on upstream ${BASE}"
+          git push origin "refs/tags/${TAG}"
+
+          # Never pass --draft or --prerelease. Renovate's github-releases datasource skips
+          # drafts outright, and a prerelease is filtered by ignoreUnstable. Either one
+          # stops update PRs from appearing in devbox with no visible error.
+          gh release create "${TAG}" --latest --title "${TAG}" --notes "$(cat <<EOF
+          Fork of [${UPSTREAM}](https://github.com/${UPSTREAM}) at [\`${BASE}\`](https://github.com/${UPSTREAM}/releases/tag/${BASE}).
+
+          ## Fork delta (\`git diff ${BASE}..${TAG}\`)
+
+          \`\`\`
+          ${delta:-(none)}
+          \`\`\`
+
+          See [FORK.md](https://github.com/${{ github.repository }}/blob/main/FORK.md).
+          EOF
+          )"

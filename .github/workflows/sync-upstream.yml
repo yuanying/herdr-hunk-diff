@@ -1,0 +1,244 @@
+name: Sync upstream
+
+# Follows upstream releases. A clean sync merges, tags and releases on its own; anything
+# unclear stops and opens a PR instead. Releasing is safe to automate because a release
+# only reaches a machine once a Renovate PR is merged in the consumer and its image is
+# rebuilt by hand.
+on:
+  schedule:
+    # Mondays, 03:17 UTC. Odd minute to dodge the top-of-hour crowd on GitHub's runners.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream tag to take (defaults to the latest release)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: jhochenbaum/herdr-hunk-diff
+
+jobs:
+  sync:
+    name: Follow upstream release
+    runs-on: ubuntu-latest
+
+    outputs:
+      landed: ${{ steps.land.outputs.landed }}
+
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      # .github/upstream-release is the single record of which upstream release main sits
+      # on. Inferring it from our own tags would misfire while a sync PR is open but not
+      # yet released.
+      - name: Decide whether to sync
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-}"
+          [ -n "${tag}" ] || tag="$(gh api "repos/${UPSTREAM}/releases/latest" --jq .tag_name)"
+          base="$(cat .github/upstream-release 2>/dev/null || echo none)"
+          branch="sync/upstream-${tag}"
+
+          run=true
+          if [ "${tag}" = "${base}" ]; then
+            run=false
+            echo "already on ${tag}"
+          elif [ "$(gh pr list --state open --head "${branch}" --json number --jq length)" != "0" ]; then
+            run=false
+            echo "::notice::${branch} already has an open PR"
+          fi
+
+          {
+            echo "tag=${tag}"
+            echo "base=${base}"
+            echo "branch=${branch}"
+            echo "run=${run}"
+          } >> "$GITHUB_OUTPUT"
+
+          printf '| upstream latest | fork base | syncing |\n|---|---|---|\n| `%s` | `%s` | %s |\n' \
+            "${tag}" "${base}" "${run}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fetch upstream tag
+        if: steps.decide.outputs.run == 'true'
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch --no-tags upstream "refs/tags/${TAG}:refs/tags/${TAG}"
+          # Keeping upstream's tag here makes /compare/<tag>...<tag>-fork.N work in the
+          # browser.
+          git push origin "refs/tags/${TAG}"
+
+      # Merge the release tag, never upstream/main: unreleased commits would otherwise end
+      # up inside a v<x>-fork.N tag and make it a lie.
+      - name: Merge upstream tag
+        if: steps.decide.outputs.run == 'true'
+        id: merge
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+          BRANCH: ${{ steps.decide.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "${BRANCH}"
+          if ! git merge --no-edit "${TAG}"; then
+            git merge --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "${TAG}" > .github/upstream-release
+          git add .github/upstream-release
+          git commit -m "chore: track upstream ${TAG}"
+
+      # Conflicts are not resolved automatically; a wrong auto-resolution here would ship
+      # silently. Print the steps and stop.
+      - name: Report conflict
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+          BRANCH: ${{ steps.decide.outputs.branch }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Merging ${TAG} conflicts
+
+          Resolve it locally (\`git config --global rerere.enabled true\` helps):
+
+          \`\`\`
+          git fetch upstream --tags
+          git switch -c ${BRANCH} main
+          git merge ${TAG}
+          # resolve, then
+          echo ${TAG} > .github/upstream-release
+          git add -A && git commit
+          git push -u origin ${BRANCH}
+          gh pr create --base main --head ${BRANCH} --title "chore: merge upstream ${TAG}"
+          \`\`\`
+          EOF
+          exit 1
+
+      - name: Set up Node.js
+        if: steps.decide.outputs.run == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      # ci.yml does not run for pushes or PRs made with GITHUB_TOKEN, so on the automatic
+      # path this is the only verification there is.
+      - name: Verify merged tree
+        if: steps.decide.outputs.run == 'true'
+        id: verify
+        continue-on-error: true
+        run: |
+          npm ci
+          npm run check
+          npm run build
+          npm test
+
+      # Everything outside these paths is upstream's, so what remains is the fork's reason
+      # to exist. An empty delta means upstream very likely absorbed the feature.
+      - name: Measure fork delta
+        if: steps.decide.outputs.run == 'true'
+        id: delta
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+        run: |
+          set -euo pipefail
+          delta="$(git diff --stat "${TAG}..HEAD" -- . \
+            ':!FORK.md' ':!.github/upstream-release' \
+            ':!.github/workflows/sync-upstream.yml' ':!.github/workflows/release.yml')"
+          if [ -z "${delta}" ]; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "text<<DELTA_EOF"
+            echo "${delta:-(none)}"
+            echo "DELTA_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Fast-forward main
+        id: land
+        if: >-
+          steps.decide.outputs.run == 'true' &&
+          steps.verify.outcome == 'success' &&
+          steps.delta.outputs.empty == 'false'
+        env:
+          BRANCH: ${{ steps.decide.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git switch main
+          git merge --ff-only "${BRANCH}"
+          git push origin main
+          echo "landed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open a PR instead
+        if: >-
+          steps.decide.outputs.run == 'true' &&
+          (steps.verify.outcome != 'success' || steps.delta.outputs.empty == 'true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.decide.outputs.tag }}
+          BASE: ${{ steps.decide.outputs.base }}
+          BRANCH: ${{ steps.decide.outputs.branch }}
+          VERIFY: ${{ steps.verify.outcome }}
+          DELTA: ${{ steps.delta.outputs.text }}
+          EMPTY: ${{ steps.delta.outputs.empty }}
+        run: |
+          set -euo pipefail
+          git push -u origin "${BRANCH}"
+
+          if [ "${EMPTY}" = "true" ]; then
+            reason="**The fork delta is empty.** Upstream may have absorbed \`branch_scope\`; see FORK.md for how to retire this fork."
+            title="chore: merge upstream ${TAG} (fork delta empty)"
+          else
+            reason="**Verification failed** (\`${VERIFY}\`). Nothing was released."
+            title="chore: merge upstream ${TAG} (checks failing)"
+          fi
+
+          gh pr create --base main --head "${BRANCH}" --draft --title "${title}" --body "$(cat <<EOF
+          Merged upstream \`${TAG}\` into \`main\`.
+
+          ${reason}
+
+          - upstream changes: https://github.com/${UPSTREAM}/compare/${BASE}...${TAG}
+          - \`npm run check && npm run build && npm test\`: **${VERIFY}**
+
+          ## Fork delta (\`git diff ${TAG}..HEAD\`)
+
+          \`\`\`
+          ${DELTA}
+          \`\`\`
+
+          Note that ci.yml does not run on PRs opened by GITHUB_TOKEN; the result above is
+          from the sync job itself.
+          EOF
+          )"
+
+  release:
+    name: Release
+    needs: sync
+    if: needs.sync.outputs.landed == 'true'
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
