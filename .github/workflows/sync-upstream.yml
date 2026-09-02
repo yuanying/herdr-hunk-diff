@@ -15,9 +15,9 @@ on:
         required: false
         type: string
 
+# Only the release job below uses GITHUB_TOKEN; the sync job runs entirely on SYNC_TOKEN.
 permissions:
   contents: write
-  pull-requests: write
 
 concurrency:
   group: sync-upstream
@@ -34,12 +34,29 @@ jobs:
     outputs:
       landed: ${{ steps.land.outputs.landed }}
 
+    # GITHUB_TOKEN cannot push a ref whose commits touch .github/workflows/ — GitHub
+    # rejects it outright, and `workflows` is not a permission the `permissions:` key can
+    # grant. Upstream changes ci.yml on most releases, so every push this job makes (the
+    # upstream tag, the sync branch, main) needs a token that carries it. SYNC_TOKEN is a
+    # fine-grained PAT on this repository; see FORK.md.
+    env:
+      GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+
     steps:
+      # Fail here rather than three steps in, half way through a merge.
+      - name: Require SYNC_TOKEN
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::SYNC_TOKEN is unset. See FORK.md for the scopes it needs."
+            exit 1
+          fi
+
       - name: Check out fork
         uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
 
       # .github/upstream-release is the single record of which upstream release main sits
       # on. Inferring it from our own tags would misfire while a sync PR is open but not
@@ -47,7 +64,6 @@ jobs:
       - name: Decide whether to sync
         id: decide
         env:
-          GH_TOKEN: ${{ github.token }}
           INPUT_TAG: ${{ inputs.upstream_tag }}
         run: |
           set -euo pipefail
@@ -142,8 +158,8 @@ jobs:
           node-version: "24"
           cache: npm
 
-      # ci.yml does not run for pushes or PRs made with GITHUB_TOKEN, so on the automatic
-      # path this is the only verification there is.
+      # ci.yml runs on the push to main and on a sync PR, but only after this job has
+      # already decided to land. Verifying here is what keeps a failing merge off main.
       - name: Verify merged tree
         if: steps.decide.outputs.run == 'true'
         id: verify
@@ -197,7 +213,6 @@ jobs:
           steps.decide.outputs.run == 'true' &&
           (steps.verify.outcome != 'success' || steps.delta.outputs.empty == 'true')
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.decide.outputs.tag }}
           BASE: ${{ steps.decide.outputs.base }}
           BRANCH: ${{ steps.decide.outputs.branch }}
@@ -230,8 +245,7 @@ jobs:
           ${DELTA}
           \`\`\`
 
-          Note that ci.yml does not run on PRs opened by GITHUB_TOKEN; the result above is
-          from the sync job itself.
+          The result above is from the sync job itself; ci.yml runs on this PR separately.
           EOF
           )"
 

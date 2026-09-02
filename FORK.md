@@ -85,6 +85,28 @@ manually. `N` increments on its own.
 Releasing is safe to automate because a release only reaches a machine after a Renovate PR
 is merged in devbox and its image is rebuilt by hand. Both are human decisions.
 
+**`SYNC_TOKEN`** — `sync-upstream.yml` runs on a repository secret of that name rather
+than on `GITHUB_TOKEN`. Upstream changes `.github/workflows/ci.yml` on most releases, and
+GitHub refuses any push from a GitHub App token whose commits touch `.github/workflows/` —
+which `GITHUB_TOKEN` is. There is no way around it from inside the workflow: `workflows`
+is not one of the permissions the `permissions:` key can grant. Without the secret the
+sync job stops on its first push with `refusing to allow a GitHub App to create or update
+workflow`. Make it a fine-grained PAT scoped to this repository alone:
+
+| Permission    | Access         |
+| ------------- | -------------- |
+| Contents      | Read and write |
+| Pull requests | Read and write |
+| Workflows     | Read and write |
+
+```
+gh secret set SYNC_TOKEN --repo yuanying/herdr-hunk-diff
+```
+
+Fine-grained tokens expire; when this one does, the sync fails on the `Require SYNC_TOKEN`
+step. `release.yml` needs none of this — it only pushes a tag pointing at a commit `main`
+already has, so `GITHUB_TOKEN` is enough there.
+
 ## Retiring the fork
 
 If upstream gains an equivalent setting:
