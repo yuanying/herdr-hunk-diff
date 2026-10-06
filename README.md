@@ -154,7 +154,7 @@ herdr server reload-config
 
 | Action          | Review opened                                                                                                                                   |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `review`        | Configured `default_target`; `auto` shows uncommitted changes, or the branch diff when the tree is clean                                        |
+| `review`        | Configured `default_target`; `auto` shows uncommitted changes, or the branch diff when the tree is clean (see `branch_scope`)                   |
 | `review:staged` | Staged changes with `hunk diff --staged`                                                                                                        |
 | `review:branch` | `<base>...HEAD`, or `<base>` alone when `branch_scope = "worktree"`; falls back to the working tree with a warning when no base can be resolved |
 | `review:commit` | The latest commit, or a locally available commit from a Ctrl-clicked GitHub commit URL                                                          |
@@ -323,8 +323,11 @@ option for commit or stash reviews.
 `branch_scope` decides what a branch review compares the base against. The default `"commits"` uses
 `<base>...HEAD`, a three-dot range between two commits, so uncommitted edits and untracked files
 never appear. `"worktree"` passes `<base>` on its own, which diffs it against the working tree and
-therefore includes them. The scope only chooses the range: a branch review still requires a base to
-resolve.
+therefore includes them. A branch review still requires a base to resolve.
+
+With `"worktree"`, `auto` skips step 1: its branch diff already shows uncommitted changes, so it
+picks the branch diff `<base>` whenever the branch is ahead of its base, dirty or not, and the
+working tree otherwise.
 
 `placement` supports the four persistent Herdr placements that return a pane ID. Herdr's modal
 `popup` placement is intentionally excluded because it cannot be reused, addressed, closed, or

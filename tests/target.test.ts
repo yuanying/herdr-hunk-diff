@@ -262,6 +262,28 @@ describe("resolveTarget", () => {
       expect(t.ref).toBe("origin/main");
     });
 
+    // The worktree scope already includes uncommitted work, so a dirty tree
+    // must not send auto to a working-tree review that hides the commits.
+    it("keeps the branch diff in auto mode when the working tree is dirty", () => {
+      const t = resolveTarget(
+        { worktree: "/wt/x" },
+        worktreeScope,
+        deps({ ahead: true, dirty: true }),
+      );
+      expect(t.mode).toBe("branch");
+      expect(t.ref).toBe("origin/main");
+    });
+
+    it("still picks the working tree in auto mode when a dirty branch is not ahead", () => {
+      const t = resolveTarget(
+        { worktree: "/wt/x" },
+        worktreeScope,
+        deps({ ahead: false, dirty: true }),
+      );
+      expect(t.mode).toBe("working");
+      expect(t.ref).toBeUndefined();
+    });
+
     it("keeps the commit range by default", () => {
       const t = resolveTarget({ worktree: "/wt/x" }, DEFAULTS, deps({}), "branch");
       expect(t.ref).toBe("origin/main...HEAD");

@@ -103,8 +103,12 @@ export function resolveTarget(
 
   if (requested !== "auto") return withWarning({ worktree, mode: requested });
 
-  // Prefer uncommitted changes over the branch diff.
-  if (deps.hasWorkingChanges(worktree, !cfg.review.exclude_untracked)) {
+  // Prefer uncommitted changes over the branch diff. The worktree scope skips this: its branch
+  // diff already includes uncommitted changes, and a working-tree review would hide the commits.
+  if (
+    cfg.review.branch_scope !== "worktree" &&
+    deps.hasWorkingChanges(worktree, !cfg.review.exclude_untracked)
+  ) {
     return withWarning({ worktree, mode: "working" });
   }
 
