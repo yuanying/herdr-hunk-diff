@@ -1,6 +1,6 @@
 {
   "name": "herdr-hunk-diff",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "A herdr plugin that reviews agent-authored diffs in hunk and sends your inline comments back to the agent that wrote them.",
   "license": "MIT",
   "author": "Jordan Hochenbaum",
@@ -35,18 +35,18 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "hunkdiff": "0.19.0",
+    "hunkdiff": "0.22.0",
     "smol-toml": "^1.8.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.4",
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^10.1.8",
-    "globals": "^17.11.0",
-    "prettier": "^3.9.6",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.9",
     "typescript": "^5.6.0",
-    "typescript-eslint": "^8.67.0",
-    "vitest": "^4.1.10"
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2"
   }
 }

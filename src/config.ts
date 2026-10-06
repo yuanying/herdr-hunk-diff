@@ -36,6 +36,8 @@ export interface PluginConfig {
     default_target: DefaultTargetMode;
     /** Applies to both `review:branch` and the branch diff `auto` selects. */
     branch_scope: BranchScope;
+    /** Comparison base for branch reviews; empty means detect one. */
+    base: string;
     watch: boolean;
     /** Passed to `hunk diff` as `--exclude-untracked`. */
     exclude_untracked: boolean;
@@ -66,6 +68,7 @@ export const DEFAULTS: PluginConfig = {
     reuse_pane: true,
     default_target: "auto",
     branch_scope: "commits",
+    base: "",
     watch: false,
     exclude_untracked: false,
     placement: "split",
@@ -127,6 +130,7 @@ export function loadConfig(configDir: string): PluginConfig {
       reuse_pane: bool(r.reuse_pane, DEFAULTS.review.reuse_pane),
       default_target: pick(r.default_target, TARGET, DEFAULTS.review.default_target),
       branch_scope: pick(r.branch_scope, BRANCH_SCOPES, DEFAULTS.review.branch_scope),
+      base: typeof r.base === "string" ? r.base : DEFAULTS.review.base,
       watch: bool(r.watch, DEFAULTS.review.watch),
       exclude_untracked: bool(r.exclude_untracked, DEFAULTS.review.exclude_untracked),
       placement: pick(r.placement, PLACEMENTS, DEFAULTS.review.placement),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { parse } from "smol-toml";
 import {
   paneEntrypointFor,
@@ -96,7 +96,23 @@ describe("herdr-plugin.toml", () => {
   });
 
   it("declares a build step that installs dependencies", () => {
-    expect(manifest.build.some((b: any) => b.command.includes("ci"))).toBe(true);
+    expect(manifest.build.some((b: any) => b.command.join(" ").includes("install-deps"))).toBe(
+      true,
+    );
+  });
+
+  it("names no package manager in a build step, so pnpm-only machines can build", () => {
+    for (const step of manifest.build) {
+      expect(step.command[0]).toBe("node");
+      expect(step.command.join(" ")).not.toMatch(/\b(npm|pnpm|yarn|bun)\b/);
+    }
+  });
+
+  it("runs every build step through a script that exists", () => {
+    for (const step of manifest.build) {
+      const script = step.command.find((c: string) => c.endsWith(".mjs"));
+      expect(existsSync(script), script).toBe(true);
+    }
   });
 
   it("declares the review pane as a split by default", () => {
@@ -133,7 +149,8 @@ describe("herdr-plugin.toml", () => {
       for (const platform of platforms) {
         for (const id of supported) {
           const pane = manifest.panes.find((p: any) => p.id === paneEntrypointFor(id, platform));
-          expect(pane.command.at(-1).trim().endsWith(` ${id}`)).toBe(true);
+          const last = pane.command.at(-1).trim();
+          expect(last === id || last.endsWith(` ${id}`)).toBe(true);
         }
       }
     });
@@ -144,20 +161,32 @@ describe("herdr-plugin.toml", () => {
       );
     });
 
-    it("pairs each pane's declared platforms with a shell those platforms have", () => {
+    it("pairs each pane's declared platforms with a launcher those platforms have", () => {
       for (const pane of manifest.panes) {
         const windows = pane.id.endsWith(WINDOWS_PANE_SUFFIX);
         expect(pane.platforms).toEqual(windows ? ["windows"] : ["macos", "linux"]);
-        expect(pane.command[0]).toBe(windows ? "cmd" : "sh");
+        expect(pane.command[0]).toBe(windows ? "node" : "sh");
       }
     });
 
-    it("expands the plugin root with the syntax each pane's own shell understands", () => {
+    it("resolves the plugin root with the syntax each pane's launcher understands", () => {
       for (const pane of manifest.panes) {
         const command = pane.command.join(" ");
         expect(command).toContain(
-          pane.id.endsWith(WINDOWS_PANE_SUFFIX) ? "%HERDR_PLUGIN_ROOT%" : "$HERDR_PLUGIN_ROOT",
+          pane.id.endsWith(WINDOWS_PANE_SUFFIX)
+            ? "process.env.HERDR_PLUGIN_ROOT"
+            : "$HERDR_PLUGIN_ROOT",
         );
+      }
+    });
+
+    // Windows argv quoting escapes embedded quotes as \" and cmd does not parse that (#29).
+    it("gives Windows panes argv words that need no quoting and no shell", () => {
+      for (const pane of manifest.panes.filter((p: any) => p.id.endsWith(WINDOWS_PANE_SUFFIX))) {
+        for (const word of pane.command) {
+          expect(word).not.toMatch(/[\s"]/);
+          expect(word).not.toMatch(/^(cmd|cmd\.exe|powershell)$/);
+        }
       }
     });
   });
