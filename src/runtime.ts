@@ -1,21 +1,28 @@
 import { spawnSync } from "node:child_process";
-import { basename } from "node:path";
 import { loadConfig, type PluginConfig, type TargetMode } from "./config.js";
 import { readContext, type HerdrContext } from "./context.js";
 import { HerdrAdapter, reportFailure, resolveHunkLauncher } from "./herdr.js";
-import { canReload, HunkAdapter, HunkProtocolError, HunkUnavailableError } from "./hunk.js";
+import {
+  canReload,
+  HunkAdapter,
+  HunkProtocolError,
+  HunkUnavailableError,
+  type HunkComment,
+} from "./hunk.js";
 import { ReviewIndex, type ReviewEntry } from "./index-store.js";
 import { formatReview, selectUnsent } from "./courier.js";
+import { forgetSavedComments, loadSavedComments } from "./saved-comments.js";
 import { parseGithubUrl } from "./notes.js";
 import { installPager, realPagerEffects, uninstallPager } from "./pager.js";
-import { resolveTarget, type Target } from "./target.js";
-import { commitExists, hasCommitsAhead, realRunner, repoRoot, resolveBaseRef } from "./git.js";
+import { describeTarget, resolveTarget, type Target } from "./target.js";
+import { commitExists, realRunner, realTargetDeps } from "./git.js";
 import {
   isReviewAction,
   paneEntrypointFor,
   reviewRequestFor,
   type ReviewActionId,
 } from "./actions.js";
+import { reportReviewMetadata } from "./metadata.js";
 import { DEFAULT_BINDINGS } from "./keys.js";
 import { installKeys, removeKeys, resolveHerdrConfigPath } from "./keys-install.js";
 
@@ -41,11 +48,7 @@ export function buildRuntime(env: NodeJS.ProcessEnv): Runtime {
   const pluginRoot = env.HERDR_PLUGIN_ROOT ?? process.cwd();
 
   // Avoid Git subprocesses for actions that never inspect a review target.
-  const targetDeps = {
-    resolveBaseRef: (repo: string) => resolveBaseRef(repo, realRunner(repo)),
-    hasCommitsAhead: (repo: string, base: string) => hasCommitsAhead(repo, base, realRunner(repo)),
-    repoRoot: (dir: string) => repoRoot(dir, realRunner(dir)),
-  };
+  const targetDeps = realTargetDeps(realRunner);
 
   let resolvedTarget: Target | undefined;
   const targetFor = (mode?: TargetMode, ref?: string): Target => {
@@ -74,25 +77,6 @@ export function buildRuntime(env: NodeJS.ProcessEnv): Runtime {
   };
 }
 
-// Metadata is cosmetic and only applies while a review pane is open.
-async function reportReviewMetadata(rt: Runtime, target: Target): Promise<void> {
-  if (!("reportMetadata" in rt.herdr)) return;
-  const entry = rt.index.get(target.worktree);
-  if (!entry?.paneId) return;
-  const unsentCount = selectUnsent(
-    await rt.hunk.listComments(target.worktree, "user").catch(() => []),
-    rt.index.sentIds(target.worktree),
-  ).length;
-  try {
-    rt.herdr.reportMetadata(entry.paneId, {
-      title: `Review: ${basename(target.worktree)}`,
-      display_agent: unsentCount > 0 ? `hunk (${unsentCount} unsent)` : "hunk",
-    });
-  } catch {
-    // Metadata failures must not fail a completed action.
-  }
-}
-
 /**
  * Records what the pane displays for the separate pane process and later reloads. Store only the
  * caller-supplied ref; derived branch ranges must be resolved again.
@@ -100,10 +84,11 @@ async function reportReviewMetadata(rt: Runtime, target: Target): Promise<void> 
 function displayedReviewRecord(
   target: Target,
   suppliedRef: string | undefined,
-): Pick<ReviewEntry, "requestedMode" | "requestedRef"> {
+): Pick<ReviewEntry, "requestedMode" | "requestedRef" | "displayedTarget"> {
   return {
     requestedRef: suppliedRef ?? null,
     requestedMode: target.mode,
+    displayedTarget: describeTarget(target),
   };
 }
 
@@ -134,7 +119,7 @@ async function reviewAction(actionId: ReviewActionId, rt: Runtime): Promise<numb
         ...displayedReviewRecord(target, suppliedRef),
         sent: [],
       });
-      await reportReviewMetadata(rt, target);
+      await reportReviewMetadata(rt, target.worktree);
       return 0;
     } catch (err) {
       // The pane may be stale; preserve sent history and fall through to a fresh open.
@@ -172,7 +157,7 @@ async function reviewAction(actionId: ReviewActionId, rt: Runtime): Promise<numb
   }
   // The pane id is only available after launch; undefined fields preserve the pre-launch record.
   rt.index.upsert({ worktree: target.worktree, paneId, sent: [] });
-  await reportReviewMetadata(rt, target);
+  await reportReviewMetadata(rt, target.worktree);
   return 0;
 }
 
@@ -197,18 +182,25 @@ function commitRefFromContext(actionId: ReviewActionId, rt: Runtime): string | u
 
 async function sendReview(rt: Runtime): Promise<number> {
   const worktree = rt.target.worktree;
-  let comments;
+  // Comments saved from a closed viewer are delivered alongside the live session's (#37).
+  const saved = loadSavedComments(rt.stateDir, worktree);
+  let live: HunkComment[] = [];
   try {
-    comments = await rt.hunk.listComments(worktree, "user");
+    live = await rt.hunk.listComments(worktree, "user");
   } catch (err) {
-    return reportFailure(
-      rt.herdr,
-      err instanceof HunkUnavailableError || err instanceof HunkProtocolError
-        ? err.message
-        : "hunk session unavailable.",
-    );
+    const noSession = err instanceof HunkUnavailableError && err.reason === "no-session";
+    if (!noSession || saved.length === 0) {
+      return reportFailure(
+        rt.herdr,
+        err instanceof HunkUnavailableError || err instanceof HunkProtocolError
+          ? err.message
+          : "hunk session unavailable.",
+      );
+    }
   }
 
+  const liveIds = new Set(live.map((c) => c.noteId));
+  const comments = [...saved.filter((c) => !liveIds.has(c.noteId)), ...live];
   const unsent = selectUnsent(comments, rt.index.sentIds(worktree));
   if (unsent.length === 0) {
     rt.herdr.notify("No new review comments to send.");
@@ -232,8 +224,13 @@ async function sendReview(rt: Runtime): Promise<number> {
     worktree,
     unsent.map((c) => c.noteId),
   );
+  forgetSavedComments(
+    rt.stateDir,
+    worktree,
+    unsent.map((c) => c.noteId),
+  );
   if (rt.cfg.roundtrip.clear_after_send) {
-    for (const c of unsent) {
+    for (const c of unsent.filter((c) => liveIds.has(c.noteId))) {
       try {
         await rt.hunk.removeComment(worktree, c.noteId);
       } catch {
@@ -244,7 +241,7 @@ async function sendReview(rt: Runtime): Promise<number> {
     }
   }
   rt.herdr.notify(`Sent ${unsent.length} comment(s) to ${label ?? target}.`);
-  await reportReviewMetadata(rt, rt.target);
+  await reportReviewMetadata(rt, worktree);
   return 0;
 }
 
@@ -292,6 +289,13 @@ export async function dispatch(actionId: string, rt: Runtime): Promise<number> {
       } catch (err) {
         return reportFailure(rt.herdr, `Could not reload the review. ${hunkErrorMessage(err)}`);
       }
+      rt.index.upsert({
+        worktree: target.worktree,
+        ...displayedReviewRecord(target, recorded?.requestedRef ?? undefined),
+        sent: [],
+      });
+      if (target.warning) rt.herdr.notify(target.warning);
+      await reportReviewMetadata(rt, target.worktree);
       return 0;
     }
     case "close-review": {
