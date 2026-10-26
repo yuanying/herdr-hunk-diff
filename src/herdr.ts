@@ -26,6 +26,16 @@ export interface HunkLauncher {
   prefix: string[];
 }
 
+/**
+ * Strips Windows' extended-length `\\?\` prefix, which Node cannot resolve as a CommonJS
+ * entrypoint (it fails with EISDIR on the bare drive). UNC roots keep their `\\server\share` form.
+ */
+export function withoutNamespacePrefix(path: string): string {
+  if (/^\\\\\?\\UNC\\/i.test(path)) return `\\\\${path.slice(8)}`;
+  if (/^\\\\\?\\[A-Za-z]:/.test(path)) return path.slice(4);
+  return path;
+}
+
 /** Runs the bundled launcher with Node, bypassing platform-specific npm shims. */
 export function resolveHunkLauncher(
   cfg: PluginConfig,
@@ -35,7 +45,9 @@ export function resolveHunkLauncher(
   if (cfg.hunk.bin !== "auto") return { bin: cfg.hunk.bin, prefix: [] };
   return {
     bin: execPath,
-    prefix: [join(pluginRoot, "node_modules", "hunkdiff", "bin", "hunk.cjs")],
+    prefix: [
+      join(withoutNamespacePrefix(pluginRoot), "node_modules", "hunkdiff", "bin", "hunk.cjs"),
+    ],
   };
 }
 
@@ -69,6 +81,7 @@ export class HerdrAdapter {
     cwd: string;
     placement: Placement;
     targetPane?: string;
+    focus?: boolean;
   }): string | null {
     const args = [
       "plugin",
@@ -84,11 +97,17 @@ export class HerdrAdapter {
       opts.placement,
     ];
     if (opts.targetPane) args.push("--target-pane", opts.targetPane);
+    if (opts.focus) args.push("--focus");
     const response = this.json(args);
     const result = asObject(response?.result);
     const pluginPane = asObject(result?.plugin_pane);
     const pane = asObject(pluginPane?.pane);
     return asString(pane?.pane_id) ?? null;
+  }
+
+  /** Focuses a plugin pane by positional id and reports whether Herdr accepted the request. */
+  focusPane(paneId: string): boolean {
+    return this.run(["plugin", "pane", "focus", paneId]).status === 0;
   }
 
   /** Closes a pane by positional id and reports whether Herdr accepted the request. */
