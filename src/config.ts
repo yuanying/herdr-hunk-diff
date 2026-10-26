@@ -42,6 +42,8 @@ export interface PluginConfig {
     /** Passed to `hunk diff` as `--exclude-untracked`. */
     exclude_untracked: boolean;
     placement: Placement;
+    /** Focuses the review pane after a review action opens or reuses it. */
+    focus: boolean;
   };
   roundtrip: {
     clear_after_send: boolean;
@@ -72,6 +74,7 @@ export const DEFAULTS: PluginConfig = {
     watch: false,
     exclude_untracked: false,
     placement: "split",
+    focus: false,
   },
   roundtrip: {
     clear_after_send: true,
@@ -134,6 +137,7 @@ export function loadConfig(configDir: string): PluginConfig {
       watch: bool(r.watch, DEFAULTS.review.watch),
       exclude_untracked: bool(r.exclude_untracked, DEFAULTS.review.exclude_untracked),
       placement: pick(r.placement, PLACEMENTS, DEFAULTS.review.placement),
+      focus: bool(r.focus, DEFAULTS.review.focus),
     },
     roundtrip: {
       clear_after_send: bool(t.clear_after_send, DEFAULTS.roundtrip.clear_after_send),
